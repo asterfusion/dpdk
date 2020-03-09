@@ -132,11 +132,11 @@ const struct supported_aead_algo aead_algos[] = {
 	}
 };
 
-static struct ipsec_sa sa_out[IPSEC_SA_MAX_ENTRIES];
-static uint32_t nb_sa_out;
+struct ipsec_sa sa_out[IPSEC_SA_MAX_ENTRIES];
+uint32_t nb_sa_out;
 
-static struct ipsec_sa sa_in[IPSEC_SA_MAX_ENTRIES];
-static uint32_t nb_sa_in;
+struct ipsec_sa sa_in[IPSEC_SA_MAX_ENTRIES];
+uint32_t nb_sa_in;
 
 static const struct supported_cipher_algo *
 find_match_cipher_algo(const char *cipher_keyword)
@@ -314,6 +314,9 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			APP_CHECK(algo != NULL, status, "unrecognized "
 				"input \"%s\"", tokens[ti]);
 
+			if (status->status < 0)
+				return;
+
 			rule->cipher_algo = algo->algo;
 			rule->block_size = algo->block_size;
 			rule->iv_len = algo->iv_len;
@@ -378,6 +381,9 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 			APP_CHECK(algo != NULL, status, "unrecognized "
 				"input \"%s\"", tokens[ti]);
 
+			if (status->status < 0)
+				return;
+
 			rule->auth_algo = algo->algo;
 			rule->auth_key_len = algo->key_len;
 			rule->digest_len = algo->digest_len;
@@ -432,6 +438,9 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 
 			APP_CHECK(algo != NULL, status, "unrecognized "
 				"input \"%s\"", tokens[ti]);
+
+			if (status->status < 0)
+				return;
 
 			rule->aead_algo = algo->algo;
 			rule->cipher_key_len = algo->key_len;
@@ -772,17 +781,6 @@ print_one_sa_rule(const struct ipsec_sa *sa, int inbound)
 	printf("\n");
 }
 
-struct sa_ctx {
-	void *satbl; /* pointer to array of rte_ipsec_sa objects*/
-	struct ipsec_sa sa[IPSEC_SA_MAX_ENTRIES];
-	union {
-		struct {
-			struct rte_crypto_sym_xform a;
-			struct rte_crypto_sym_xform b;
-		};
-	} xf[IPSEC_SA_MAX_ENTRIES];
-};
-
 static struct sa_ctx *
 sa_create(const char *name, int32_t socket_id)
 {
@@ -984,7 +982,6 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 		}
 
 		if (sa->aead_algo == RTE_CRYPTO_AEAD_AES_GCM) {
-			struct rte_ipsec_session *ips;
 			iv_length = 12;
 
 			sa_ctx->xf[idx].a.type = RTE_CRYPTO_SYM_XFORM_AEAD;
@@ -1004,20 +1001,6 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 				sa->digest_len;
 
 			sa->xforms = &sa_ctx->xf[idx].a;
-
-			ips = ipsec_get_primary_session(sa);
-			if (ips->type ==
-				RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL ||
-				ips->type ==
-				RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO) {
-				rc = create_inline_session(skt_ctx, sa, ips);
-				if (rc != 0) {
-					RTE_LOG(ERR, IPSEC_ESP,
-						"create_inline_session() failed\n");
-					return -EINVAL;
-				}
-			}
-			print_one_sa_rule(sa, inbound);
 		} else {
 			switch (sa->cipher_algo) {
 			case RTE_CRYPTO_CIPHER_NULL:
@@ -1082,9 +1065,21 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 			sa_ctx->xf[idx].a.next = &sa_ctx->xf[idx].b;
 			sa_ctx->xf[idx].b.next = NULL;
 			sa->xforms = &sa_ctx->xf[idx].a;
-
-			print_one_sa_rule(sa, inbound);
 		}
+
+		if (ips->type ==
+			RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL ||
+			ips->type ==
+			RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO) {
+			rc = create_inline_session(skt_ctx, sa, ips);
+			if (rc != 0) {
+				RTE_LOG(ERR, IPSEC_ESP,
+					"create_inline_session() failed\n");
+				return -EINVAL;
+			}
+		}
+
+		print_one_sa_rule(sa, inbound);
 	}
 
 	return 0;

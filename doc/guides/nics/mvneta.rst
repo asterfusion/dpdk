@@ -3,6 +3,8 @@
     Copyright(c) 2018 Semihalf.
     All rights reserved.
 
+.. _mvneta_poll_mode_driver:
+
 MVNETA Poll Mode Driver
 =======================
 
@@ -12,13 +14,6 @@ for the Marvell NETA 1/2.5 Gbps adapter.
 Detailed information about SoCs that use PPv2 can be obtained here:
 
 * https://www.marvell.com/embedded-processors/armada-3700/
-
-.. Note::
-
-   Due to external dependencies, this driver is disabled by default. It must
-   be enabled manually by setting relevant configuration option manually.
-   Please refer to `Config File Options`_ section for further details.
-
 
 Features
 --------
@@ -31,6 +26,7 @@ Features of the MVNETA PMD are:
 - Speed capabilities
 - Jumbo frame
 - MTU update
+- Jumbo frame
 - Promiscuous mode
 - Unicast MAC filter
 - Link status
@@ -39,6 +35,8 @@ Features of the MVNETA PMD are:
 - L4 checksum offload
 - Packet type parsing
 - Basic stats
+- Multicast MAC filter
+- Scattered TX frames
 
 
 Limitations
@@ -48,21 +46,16 @@ Limitations
   functionality. Current workaround is to reset board so that NETA has a
   chance to start in a sane state.
 
+- MUSDK architecture does not support changing configuration in run time.
+  All nessesary configurations should be done before first dev_start().
+
+- Running more than one DPDK-MUSDK application simultaneously is not supported.
+
 Prerequisites
 -------------
 
-- Custom Linux Kernel sources
-
-  .. code-block:: console
-
-     git clone https://github.com/MarvellEmbeddedProcessors/linux-marvell.git -b linux-4.4.120-armada-18.09
-
-
+- Linux Kernel sources
 - MUSDK (Marvell User-Space SDK) sources
-
-  .. code-block:: console
-
-     git clone https://github.com/MarvellEmbeddedProcessors/musdk-marvell.git -b musdk-armada-18.09
 
   MUSDK is a light-weight library that provides direct access to Marvell's
   NETA. Alternatively prebuilt MUSDK library can be
@@ -70,11 +63,8 @@ Prerequisites
   approval has been granted, library can be found by typing ``musdk`` in
   the search box.
 
-  MUSDK must be configured with the following features:
-
-  .. code-block:: console
-
-     --enable-pp2=no --enable-neta
+  To better understand the library, please consult documentation
+  available in the ``doc`` top level directory of the MUSDK sources.
 
 - DPDK environment
 
@@ -88,66 +78,47 @@ Config File Options
 ~~~~~~~~~~~~~~~~~~~
 
 The following options can be modified in the ``config`` file.
+Please note that enabling debugging options may affect system performance.
 
 - ``CONFIG_RTE_LIBRTE_MVNETA_PMD`` (default ``n``)
 
-    Toggle compilation of the librte_pmd_mvneta driver.
+  By default it is enabled only for defconfig_arm64-armada-* config.
+  Toggle compilation of the ``librte_pmd_mvneta`` driver.
 
-Runtime options
-~~~~~~~~~~~~~~~
+- ``CONFIG_RTE_LIBRTE_MVEP_COMMON`` (default ``n``)
 
-The following ``devargs`` options can be enabled at runtime. They must
-be passed as part of EAL arguments.
-
-- ``iface`` (mandatory, with no default value)
-
-  The name of port (owned by MUSDK) that should be enabled in DPDK.
-  This options can be repeated resulting in a list of ports to be
-  enabled.  For instance below will enable ``eth0`` and ``eth1`` ports.
-
-.. code-block:: console
-
-   ./testpmd --vdev=net_mvneta,iface=eth0,iface=eth1 \
-    -c 3 -- -i --p 3 -a
-
+  By default it is enabled only for defconfig_arm64-armada-* config.
+  Toggle compilation of the Marvell common utils.
+  Must be enabled for Marvell PMDs.
 
 Building DPDK
 -------------
 
 Driver needs precompiled MUSDK library during compilation.
-
-.. code-block:: console
-
-   export CROSS_COMPILE=<toolchain>/bin/aarch64-linux-gnu-
-   ./bootstrap
-   ./configure --host=aarch64-linux-gnu --enable-pp2=no --enable-neta
-   make install
-
 MUSDK will be installed to `usr/local` under current directory.
 For the detailed build instructions please consult ``doc/musdk_get_started.txt``.
 
 Before the DPDK build process the environmental variable ``LIBMUSDK_PATH`` with
 the path to the MUSDK installation directory needs to be exported.
 
+For additional instructions regarding DPDK cross compilation please refer to :doc:`Cross compile DPDK for ARM64 <../linux_gsg/cross_build_dpdk_for_arm64>`.
+
 .. code-block:: console
 
    export LIBMUSDK_PATH=<musdk>/usr/local
-   export CROSS=aarch64-linux-gnu-
-   make config T=arm64-armv8a-linux-gcc
-   sed -ri 's,(MVNETA_PMD=)n,\1y,' build/.config
+   make config T=arm64-armada-linuxapp-gcc
    make
 
 Usage Example
 -------------
 
 MVNETA PMD requires extra out of tree kernel modules to function properly.
-`musdk_uio` and `mv_neta_uio` sources are part of the MUSDK. Please consult
-``doc/musdk_get_started.txt`` for the detailed build instructions.
+Please consult ``doc/musdk_get_started.txt`` for the detailed build instructions.
 
 .. code-block:: console
 
-   insmod musdk_uio.ko
-   insmod mv_neta_uio.ko
+   insmod musdk_cma.ko
+   insmod uio_pdrv_genirq.ko of_id="generic-uio"
 
 Additionally interfaces used by DPDK application need to be put up:
 
@@ -161,11 +132,17 @@ In order to run testpmd example application following command can be used:
 .. code-block:: console
 
    ./testpmd --vdev=net_mvneta,iface=eth0,iface=eth1 -c 3 -- \
-     -i --p 3 -a --txd 256 --rxd 128 --rxq=1 --txq=1  --nb-cores=1
+   --burst=20 --txd=512 --rxd=512 --rxq=1 --txq=1  --nb-cores=1 -i -a
 
 
 In order to run l2fwd example application following command can be used:
 
 .. code-block:: console
 
-   ./l2fwd --vdev=net_mvneta,iface=eth0,iface=eth1 -c 3 -- -T 1 -p 3
+   ./l2fwd --vdev=eth_mvneta,iface=eth0,iface=eth1 -c 3 -- -T 1 -p 3
+
+In order to run l2fwd example application following command can be used:
+
+.. code-block:: console
+
+   ./l3fwd --vdev=eth_mvneta,iface=eth0,iface=eth1 -c 2 -- -P -p 3 -L --config="(0,0,1),(1,0,1)"

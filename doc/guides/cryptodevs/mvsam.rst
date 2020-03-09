@@ -1,6 +1,7 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
-    Copyright(c) 2017 Marvell International Ltd.
-    Copyright(c) 2017 Semihalf.
+    Copyright(c) 2018 Marvell International Ltd.
+    Copyright(c) 2018 Semihalf.
+    All rights reserved.
 
 MVSAM Crypto Poll Mode Driver
 =============================
@@ -21,6 +22,15 @@ Features
 --------
 
 MVSAM CRYPTO PMD has support for:
+
+Features:
+
+* Symmetric crypto operations: encryption/description and authentication
+* Symmetric chaining crypto operations
+* HW Accelerated using EIP97/EIP197b/EIP197d
+* Out-of-place Scatter-gather list Input, Linear Buffers Output
+* Out-of-place Linear Buffers Input, Linear Buffers Output
+
 
 Cipher algorithms:
 
@@ -64,33 +74,53 @@ Limitations
 Installation
 ------------
 
-MVSAM CRYPTO PMD driver compilation is disabled by default due to external dependencies.
-Currently there are two driver specific compilation options in
-``config/common_base`` available:
+The following options can be modified in the ``config`` file.
+Please note that enabling debugging options may affect system performance.
 
 - ``CONFIG_RTE_LIBRTE_PMD_MVSAM_CRYPTO`` (default: ``n``)
 
-    Toggle compilation of the librte_pmd_mvsam driver.
+  By default it is enabled only for defconfig_arm64-armada-* config.
+  Toggle compilation of the ``librte_pmd_mvsam`` driver.
 
-MVSAM CRYPTO PMD requires MUSDK built with EIP197 support thus following
-extra option must be passed to the library configuration script:
+- ``CONFIG_RTE_LIBRTE_PMD_MVSAM_CRYPTO_DEBUG`` (default: ``n``)
+
+  Toggle display of debugging messages.
+
+- ``CONFIG_RTE_LIBRTE_MVEP_COMMON`` (default ``n``)
+
+  By default it is enabled only for defconfig_arm64-armada-* config.
+  Toggle compilation of the Marvell common utils.
+  Must be enabled for Marvell PMDs.
+
+Building DPDK
+-------------
+
+Driver needs precompiled MUSDK library during compilation.
+MUSDK will be installed to `usr/local` under current directory.
+For the detailed build instructions please consult ``doc/musdk_get_started.txt``.
+
+Before the DPDK build process the environmental variable ``LIBMUSDK_PATH`` with
+the path to the MUSDK installation directory needs to be exported.
+
+For additional instructions regarding DPDK cross compilation please refer to :doc:`Cross compile DPDK for ARM64 <../linux_gsg/cross_build_dpdk_for_arm64>`.
 
 .. code-block:: console
 
-   --enable-sam [--enable-sam-statistics] [--enable-sam-debug]
+   export LIBMUSDK_PATH=<musdk>/usr/local
 
-For instructions how to build required kernel modules please refer
-to `doc/musdk_get_started.txt`.
+   make config T=arm64-armada-linuxapp-gcc
+   make
 
-Initialization
---------------
+Usage Example
+-------------
 
-After successfully building MVSAM CRYPTO PMD, the following modules need to be
-loaded:
+MVSAM CRYPTO PMD requires extra out of tree kernel modules to function properly.
+Please consult ``doc/musdk_get_started.txt`` for the detailed build instructions.
 
 .. code-block:: console
 
    insmod musdk_cma.ko
+   insmod uio_pdrv_genirq.ko of_id="generic-uio"
    insmod crypto_safexcel.ko rings=0,0
    insmod mv_sam_uio.ko
 

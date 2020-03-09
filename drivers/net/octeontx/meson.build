@@ -5,6 +5,8 @@ subdir('base')
 objs = [base_objs]
 
 sources = files('octeontx_rxtx.c',
+		'octeontx_vlan.c',
+		'octeontx_flow_ctrl.c',
 		'octeontx_ethdev.c'
 		)
 

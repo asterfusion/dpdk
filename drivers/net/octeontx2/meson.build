@@ -20,11 +20,13 @@ sources = files('otx2_rx.c',
 		'otx2_flow_utils.c',
 		'otx2_ethdev_irq.c',
 		'otx2_ethdev_ops.c',
+		'otx2_ethdev_sec.c',
 		'otx2_ethdev_debug.c',
 		'otx2_ethdev_devargs.c'
 		)
 
-deps += ['bus_pci', 'common_octeontx2', 'mempool_octeontx2']
+deps += ['bus_pci', 'cryptodev', 'eventdev', 'security']
+deps += ['common_octeontx2', 'mempool_octeontx2']
 
 cflags += ['-flax-vector-conversions']
 
@@ -39,3 +41,6 @@ foreach flag: extra_flags
 		cflags += flag
 	endif
 endforeach
+
+includes += include_directories('../../common/cpt')
+includes += include_directories('../../crypto/octeontx2')

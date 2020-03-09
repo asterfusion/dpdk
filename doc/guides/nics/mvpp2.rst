@@ -1,6 +1,7 @@
 ..  SPDX-License-Identifier: BSD-3-Clause
-    Copyright(c) 2017 Marvell International Ltd.
-    Copyright(c) 2017 Semihalf.
+    Copyright(c) 2018 Marvell International Ltd.
+    Copyright(c) 2018 Semihalf.
+    All rights reserved.
 
 .. _mvpp2_poll_mode_driver:
 
@@ -83,21 +84,7 @@ Prerequisites
 
 - Custom Linux Kernel sources
 
-  .. code-block:: console
-
-     git clone https://github.com/MarvellEmbeddedProcessors/linux-marvell.git -b linux-4.4.120-armada-18.09
-
-- Out of tree `mvpp2x_sysfs` kernel module sources
-
-  .. code-block:: console
-
-     git clone https://github.com/MarvellEmbeddedProcessors/mvpp2x-marvell.git -b mvpp2x-armada-18.09
-
 - MUSDK (Marvell User-Space SDK) sources
-
-  .. code-block:: console
-
-     git clone https://github.com/MarvellEmbeddedProcessors/musdk-marvell.git -b musdk-armada-18.09
 
   MUSDK is a light-weight library that provides direct access to Marvell's
   PPv2 (Packet Processor v2). Alternatively prebuilt MUSDK library can be
@@ -121,25 +108,19 @@ The following options can be modified in the ``config`` file.
 
 - ``CONFIG_RTE_LIBRTE_MVPP2_PMD`` (default ``n``)
 
-    Toggle compilation of the librte mvpp2 driver.
+  By default it is enabled only for defconfig_arm64-armada-* config.
+  Toggle compilation of the ``librte_pmd_mvpp2`` driver.
 
-    .. Note::
+- ``CONFIG_RTE_LIBRTE_MVEP_COMMON`` (default ``n``)
 
-       When MVPP2 PMD is enabled ``CONFIG_RTE_LIBRTE_MVNETA_PMD`` must be disabled
-
+  By default it is enabled only for defconfig_arm64-armada-* config.
+  Toggle compilation of the Marvell common utils.
+  Must be enabled for Marvell PMDs.
 
 Building DPDK
 -------------
 
 Driver needs precompiled MUSDK library during compilation.
-
-.. code-block:: console
-
-   export CROSS_COMPILE=<toolchain>/bin/aarch64-linux-gnu-
-   ./bootstrap
-   ./configure --host=aarch64-linux-gnu
-   make install
-
 MUSDK will be installed to `usr/local` under current directory.
 For the detailed build instructions please consult ``doc/musdk_get_started.txt``.
 
@@ -151,28 +132,19 @@ For additional instructions regarding DPDK cross compilation please refer to :do
 .. code-block:: console
 
    export LIBMUSDK_PATH=<musdk>/usr/local
-   export CROSS=<toolchain>/bin/aarch64-linux-gnu-
-   export RTE_KERNELDIR=<kernel-dir>
-   export RTE_TARGET=arm64-armv8a-linux-gcc
-
-   make config T=arm64-armv8a-linux-gcc
-   sed -i "s/MVNETA_PMD=y/MVNETA_PMD=n/" build/.config
-   sed -i "s/MVPP2_PMD=n/MVPP2_PMD=y/" build/.config
+   make config T=arm64-armada-linuxapp-gcc
    make
 
 Usage Example
 -------------
 
 MVPP2 PMD requires extra out of tree kernel modules to function properly.
-`musdk_cma` sources are part of the MUSDK. Please consult
-``doc/musdk_get_started.txt`` for the detailed build instructions.
-For `mvpp2x_sysfs` please consult ``Documentation/pp22_sysfs.txt`` for the
-detailed build instructions.
+Please consult ``doc/musdk_get_started.txt`` for the detailed build instructions.
 
 .. code-block:: console
 
    insmod musdk_cma.ko
-   insmod mvpp2x_sysfs.ko
+   insmod uio_pdrv_genirq.ko of_id="generic-uio"
 
 Additionally interfaces used by DPDK application need to be put up:
 
@@ -374,7 +346,7 @@ Usage example
 .. code-block:: console
 
    ./testpmd --vdev=eth_mvpp2,iface=eth0,iface=eth2,cfg=/home/user/mrvl.conf \
-     -c 7 -- -i -a --disable-hw-vlan-strip --rxq=3 --txq=3
+     -c 7 -- -i -a --rxq=3 --txq=3
 
 .. _flowapi:
 
@@ -395,6 +367,7 @@ Following flow action items are supported by the driver:
 
 * DROP
 * QUEUE
+* METER
 
 Supported flow items
 ~~~~~~~~~~~~~~~~~~~~
@@ -486,7 +459,7 @@ Before proceeding run testpmd user application:
 
 .. code-block:: console
 
-   ./testpmd --vdev=eth_mvpp2,iface=eth0,iface=eth2 -c 3 -- -i --p 3 -a --disable-hw-vlan-strip
+   ./testpmd --vdev=eth_mvpp2,iface=eth0,iface=eth2 -c 3 -- -i --p 3 -a
 
 Example #1
 ^^^^^^^^^^
@@ -658,7 +631,7 @@ For a detailed usage description please refer to "Traffic Management" section in
    .. code-block:: console
 
 		./testpmd --vdev=net_mrvl,iface=eth0,iface=eth2,cfg=./qos_config -c 7 -- \
-		-i -p 3 --disable-hw-vlan-strip --rxq 3 --txq 3 --txd 1024 --rxd 1024
+		-i -p 3 --rxq 3 --txq 3 --txd 1024 --rxd 1024
 
 2. Stop all ports:
 

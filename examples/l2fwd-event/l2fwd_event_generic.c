@@ -42,8 +42,10 @@ l2fwd_event_device_setup_generic(struct l2fwd_resources *rsrc)
 
 	/* Event device configurtion */
 	rte_event_dev_info_get(event_d_id, &dev_info);
-	evt_rsrc->disable_implicit_release = !!(dev_info.event_dev_cap &
-				    RTE_EVENT_DEV_CAP_IMPLICIT_RELEASE_DISABLE);
+
+	/* Enable implicit release */
+	if (dev_info.event_dev_cap & RTE_EVENT_DEV_CAP_IMPLICIT_RELEASE_DISABLE)
+		evt_rsrc->disable_implicit_release = 0;
 
 	if (dev_info.event_dev_cap & RTE_EVENT_DEV_CAP_QUEUE_ALL_TYPES)
 		event_queue_cfg |= RTE_EVENT_QUEUE_CFG_ALL_TYPES;
@@ -70,7 +72,8 @@ l2fwd_event_device_setup_generic(struct l2fwd_resources *rsrc)
 		event_d_conf.nb_event_port_enqueue_depth =
 				dev_info.max_event_port_enqueue_depth;
 
-	num_workers = rte_lcore_count() - rte_service_lcore_count();
+	/* Ignore Master core and service cores. */
+	num_workers = rte_lcore_count() - 1 - rte_service_lcore_count();
 	if (dev_info.max_event_ports < num_workers)
 		num_workers = dev_info.max_event_ports;
 
@@ -95,11 +98,13 @@ l2fwd_event_port_setup_generic(struct l2fwd_resources *rsrc)
 	struct l2fwd_event_resources *evt_rsrc = rsrc->evt_rsrc;
 	uint8_t event_d_id = evt_rsrc->event_d_id;
 	struct rte_event_port_conf event_p_conf = {
-		.dequeue_depth = 32,
-		.enqueue_depth = 32,
+		.dequeue_depth = 128,
+		.enqueue_depth = 128,
 		.new_event_threshold = 4096
 	};
 	struct rte_event_port_conf def_p_conf;
+	struct rte_event_dev_info dev_info;
+
 	uint8_t event_p_id;
 	int32_t ret;
 
@@ -108,22 +113,29 @@ l2fwd_event_port_setup_generic(struct l2fwd_resources *rsrc)
 	if (!evt_rsrc->evp.event_p_id)
 		rte_panic("No space is available\n");
 
+	memset(&dev_info, 0, sizeof(struct rte_event_dev_info));
+	rte_event_dev_info_get(event_d_id, &dev_info);
+
 	memset(&def_p_conf, 0, sizeof(struct rte_event_port_conf));
-	rte_event_port_default_conf_get(event_d_id, 0, &def_p_conf);
+	ret = rte_event_port_default_conf_get(event_d_id, 0, &def_p_conf);
+	if (ret < 0)
+		rte_panic("Error to get default configuration of event port\n");
 
 	if (def_p_conf.new_event_threshold < event_p_conf.new_event_threshold)
 		event_p_conf.new_event_threshold =
 			def_p_conf.new_event_threshold;
 
-	if (def_p_conf.dequeue_depth < event_p_conf.dequeue_depth)
-		event_p_conf.dequeue_depth = def_p_conf.dequeue_depth;
+	if (dev_info.max_event_port_dequeue_depth < event_p_conf.dequeue_depth)
+		event_p_conf.dequeue_depth =
+			dev_info.max_event_port_dequeue_depth;
 
-	if (def_p_conf.enqueue_depth < event_p_conf.enqueue_depth)
-		event_p_conf.enqueue_depth = def_p_conf.enqueue_depth;
+	if (dev_info.max_event_port_enqueue_depth < event_p_conf.enqueue_depth)
+		event_p_conf.enqueue_depth =
+			dev_info.max_event_port_enqueue_depth;
 
 	event_p_conf.disable_implicit_release =
 		evt_rsrc->disable_implicit_release;
-	evt_rsrc->deq_depth = def_p_conf.dequeue_depth;
+	evt_rsrc->deq_depth = event_p_conf.dequeue_depth;
 
 	for (event_p_id = 0; event_p_id < evt_rsrc->evp.nb_ports;
 								event_p_id++) {
@@ -170,7 +182,10 @@ l2fwd_event_queue_setup_generic(struct l2fwd_resources *rsrc,
 	if (!evt_rsrc->evq.event_q_id)
 		rte_panic("Memory allocation failure\n");
 
-	rte_event_queue_default_conf_get(event_d_id, 0, &def_q_conf);
+	ret = rte_event_queue_default_conf_get(event_d_id, 0, &def_q_conf);
+	if (ret < 0)
+		rte_panic("Error to get default config of event queue\n");
+
 	if (def_q_conf.nb_atomic_flows < event_q_conf.nb_atomic_flows)
 		event_q_conf.nb_atomic_flows = def_q_conf.nb_atomic_flows;
 

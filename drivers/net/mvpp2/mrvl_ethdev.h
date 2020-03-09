@@ -82,46 +82,17 @@
 /** Maximum length of a match string */
 #define MRVL_MATCH_LEN 16
 
-/** Parsed fields in processed rte_flow_item. */
-enum mrvl_parsed_fields {
-	/* eth flags */
-	F_DMAC =         BIT(0),
-	F_SMAC =         BIT(1),
-	F_TYPE =         BIT(2),
-	/* vlan flags */
-	F_VLAN_PRI =     BIT(3),
-	F_VLAN_ID =      BIT(4),
-	F_VLAN_TCI =     BIT(5), /* not supported by MUSDK yet */
-	/* ip4 flags */
-	F_IP4_TOS =      BIT(6),
-	F_IP4_SIP =      BIT(7),
-	F_IP4_DIP =      BIT(8),
-	F_IP4_PROTO =    BIT(9),
-	/* ip6 flags */
-	F_IP6_TC =       BIT(10), /* not supported by MUSDK yet */
-	F_IP6_SIP =      BIT(11),
-	F_IP6_DIP =      BIT(12),
-	F_IP6_FLOW =     BIT(13),
-	F_IP6_NEXT_HDR = BIT(14),
-	/* tcp flags */
-	F_TCP_SPORT =    BIT(15),
-	F_TCP_DPORT =    BIT(16),
-	/* udp flags */
-	F_UDP_SPORT =    BIT(17),
-	F_UDP_DPORT =    BIT(18),
-};
-
 /** PMD-specific definition of a flow rule handle. */
 struct mrvl_mtr;
 struct rte_flow {
 	LIST_ENTRY(rte_flow) next;
 	struct mrvl_mtr *mtr;
 
-	enum mrvl_parsed_fields pattern;
-
+	struct pp2_cls_tbl_key table_key;
 	struct pp2_cls_tbl_rule rule;
 	struct pp2_cls_cos_desc cos;
 	struct pp2_cls_tbl_action action;
+	uint8_t next_udf_id;
 };
 
 struct mrvl_mtr_profile {
@@ -197,7 +168,6 @@ struct mrvl_priv {
 
 	struct pp2_cls_tbl_params cls_tbl_params;
 	struct pp2_cls_tbl *cls_tbl;
-	uint32_t cls_tbl_pattern;
 	LIST_HEAD(mrvl_flows, rte_flow) flows;
 
 	struct pp2_cls_plcr *default_policer;
@@ -226,5 +196,48 @@ extern int mrvl_logtype;
 #define MRVL_LOG(level, fmt, args...) \
 	rte_log(RTE_LOG_ ## level, mrvl_logtype, "%s(): " fmt "\n", \
 		__func__, ##args)
+
+extern struct pp2_bpool *dummy_pool[PP2_NUM_PKT_PROC];
+
+/**
+ * Convert string to uint32_t with extra checks for result correctness.
+ *
+ * @param string String to convert.
+ * @param val Conversion result.
+ * @returns 0 in case of success, negative value otherwise.
+ */
+static int
+get_val_securely(const char *string, uint32_t *val)
+{
+	char *endptr;
+	size_t len = strlen(string);
+
+	if (len == 0)
+		return -1;
+
+	errno = 0;
+	*val = strtoul(string, &endptr, 0);
+	if (errno != 0 || RTE_PTR_DIFF(endptr, string) != len)
+		return -2;
+
+	return 0;
+}
+
+static int
+get_val_securely8(const char *string, uint32_t base, uint8_t *val)
+{
+	char *endptr;
+	size_t len = strlen(string);
+
+	if (len == 0)
+		return -1;
+
+	errno = 0;
+	*val = (uint8_t)strtoul(string, &endptr, base);
+	if (errno != 0 || RTE_PTR_DIFF(endptr, string) != len)
+		return -2;
+
+	return 0;
+}
 
 #endif /* _MRVL_ETHDEV_H_ */

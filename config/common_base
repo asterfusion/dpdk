@@ -488,6 +488,16 @@ CONFIG_RTE_LIBRTE_MVPP2_PMD=n
 CONFIG_RTE_LIBRTE_MVNETA_PMD=n
 
 #
+# Compile Marvell ARMADA EP PMD driver
+#
+CONFIG_RTE_LIBRTE_ARMADA_EP_PMD=y
+
+#
+# Compile Marvell MVGIU PMD driver
+#
+CONFIG_RTE_LIBRTE_MVGIU_PMD=n
+
+#
 # Compile support for VMBus library
 #
 CONFIG_RTE_LIBRTE_VMBUS=n
@@ -794,6 +804,11 @@ CONFIG_RTE_LIBRTE_PMD_IOAT_RAWDEV=y
 # Compile PMD for octeontx2 DMA raw device
 #
 CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_DMA_RAWDEV=y
+
+#
+# Compile PMD for octeontx2 SDP EP raw device
+#
+CONFIG_RTE_LIBRTE_PMD_OCTEONTX2_EP_RAWDEV=y
 
 #
 # Compile PMD for NTB raw device

@@ -13,12 +13,12 @@
 #include <errno.h>
 #include <getopt.h>
 #include <signal.h>
-#include <stdbool.h>
 
 #include <rte_common.h>
 #include <rte_vect.h>
 #include <rte_byteorder.h>
 #include <rte_log.h>
+#include <rte_malloc.h>
 #include <rte_memory.h>
 #include <rte_memcpy.h>
 #include <rte_eal.h>
@@ -33,7 +33,6 @@
 #include <rte_random.h>
 #include <rte_debug.h>
 #include <rte_ether.h>
-#include <rte_ethdev.h>
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_ip.h>
@@ -46,12 +45,7 @@
 #include <cmdline_parse_etheraddr.h>
 
 #include "l3fwd.h"
-
-/*
- * Configurable number of RX/TX ring descriptors
- */
-#define RTE_TEST_RX_DESC_DEFAULT 1024
-#define RTE_TEST_TX_DESC_DEFAULT 1024
+#include "l3fwd_event.h"
 
 #define MAX_TX_QUEUE_PER_PORT RTE_MAX_ETHPORTS
 #define MAX_RX_QUEUE_PER_PORT 128
@@ -274,7 +268,7 @@ init_lcore_rx_queues(void)
 }
 
 /* display usage */
-static void
+void
 print_usage(const char *prgname)
 {
 	fprintf(stderr, "%s [EAL options] --"
@@ -289,7 +283,9 @@ print_usage(const char *prgname)
 		" [--hash-entry-num]"
 		" [--ipv6]"
 		" [--parse-ptype]"
-		" [--per-port-pool]\n\n"
+		" [--per-port-pool]"
+		" [--mode]"
+		" [--eventq-sched]\n\n"
 
 		"  -p PORTMASK: Hexadecimal bitmask of ports to configure\n"
 		"  -P : Enable promiscuous mode\n"
@@ -304,7 +300,13 @@ print_usage(const char *prgname)
 		"  --hash-entry-num: Specify the hash entry number in hexadecimal to be setup\n"
 		"  --ipv6: Set if running ipv6 packets\n"
 		"  --parse-ptype: Set to use software to analyze packet type\n"
-		"  --per-port-pool: Use separate buffer pool per port\n\n",
+		"  --per-port-pool: Use separate buffer pool per port\n"
+		"  --mode: Packet transfer mode for I/O, poll or eventdev\n"
+		"          Default mode = poll\n"
+		"  --eventq-sched: Event queue synchronization method "
+		"                  ordered, atomic or parallel.\n\t\t"
+		"		   Default: atomic\n\t\t"
+		"                  Valid only if --mode=eventdev\n\n",
 		prgname);
 }
 
@@ -441,7 +443,6 @@ parse_eth_dest(const char *optarg)
 }
 
 #define MAX_JUMBO_PKT_LEN  9600
-#define MEMPOOL_CACHE_SIZE 256
 
 static const char short_options[] =
 	"p:"  /* portmask */
@@ -504,11 +505,19 @@ static const struct option lgopts[] = {
 static int
 parse_args(int argc, char **argv)
 {
+	struct l3fwd_event_resources *evt_rsrc;
 	int opt, ret;
 	char **argvopt;
 	int option_index;
 	char *prgname = argv[0];
 
+	evt_rsrc = l3fwd_get_eventdev_rsrc();
+	evt_rsrc->args = rte_zmalloc("l3fwd_event_args", sizeof(char *), 0);
+	if (evt_rsrc->args == NULL)
+		rte_exit(EXIT_FAILURE,
+				"Unable to allocate memory for eventdev arg");
+	evt_rsrc->args[0] = argv[0];
+	evt_rsrc->nb_args++;
 	argvopt = argv;
 
 	/* Error or normal output strings. */
@@ -536,6 +545,15 @@ parse_args(int argc, char **argv)
 
 		case 'L':
 			l3fwd_lpm_on = 1;
+			break;
+
+		case '?':
+			/* Eventdev options are encountered skip for
+			 * now and processed later.
+			 */
+			evt_rsrc->args[evt_rsrc->nb_args] =
+				argv[optind - 1];
+			evt_rsrc->nb_args++;
 			break;
 
 		/* long options */
@@ -654,7 +672,7 @@ print_ethaddr(const char *name, const struct rte_ether_addr *eth_addr)
 	printf("%s%s", name, buf);
 }
 
-static int
+int
 init_mem(uint16_t portid, unsigned int nb_mbuf)
 {
 	struct lcore_conf *qconf;
@@ -808,13 +826,101 @@ prepare_ptype_parser(uint16_t portid, uint16_t queueid)
 	return 0;
 }
 
+static inline int
+l3fwd_service_enable(uint32_t service_id)
+{
+	uint8_t min_service_count = UINT8_MAX;
+	uint32_t slcore_array[RTE_MAX_LCORE];
+	unsigned int slcore = 0;
+	uint8_t service_count;
+	int32_t slcore_count;
+
+	if (!rte_service_lcore_count())
+		return -ENOENT;
+
+	slcore_count = rte_service_lcore_list(slcore_array, RTE_MAX_LCORE);
+	if (slcore_count < 0)
+		return -ENOENT;
+	/* Get the core which has least number of services running. */
+	while (slcore_count--) {
+		/* Reset default mapping */
+		rte_service_map_lcore_set(service_id,
+				slcore_array[slcore_count], 0);
+		service_count = rte_service_lcore_count_services(
+				slcore_array[slcore_count]);
+		if (service_count < min_service_count) {
+			slcore = slcore_array[slcore_count];
+			min_service_count = service_count;
+		}
+	}
+	if (rte_service_map_lcore_set(service_id, slcore, 1))
+		return -ENOENT;
+	rte_service_lcore_start(slcore);
+
+	return 0;
+}
+
+static void
+l3fwd_event_service_setup(void)
+{
+	struct l3fwd_event_resources *evt_rsrc = l3fwd_get_eventdev_rsrc();
+	struct rte_event_dev_info evdev_info;
+	uint32_t service_id, caps;
+	int ret, i;
+
+	rte_event_dev_info_get(evt_rsrc->event_d_id, &evdev_info);
+	if (evdev_info.event_dev_cap  & RTE_EVENT_DEV_CAP_DISTRIBUTED_SCHED) {
+		ret = rte_event_dev_service_id_get(evt_rsrc->event_d_id,
+				&service_id);
+		if (ret != -ESRCH && ret != 0)
+			rte_exit(EXIT_FAILURE,
+				 "Error in starting eventdev service\n");
+		l3fwd_service_enable(service_id);
+	}
+
+	for (i = 0; i < evt_rsrc->rx_adptr.nb_rx_adptr; i++) {
+		ret = rte_event_eth_rx_adapter_caps_get(evt_rsrc->event_d_id,
+				evt_rsrc->rx_adptr.rx_adptr[i], &caps);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+				 "Failed to get Rx adapter[%d] caps\n",
+				 evt_rsrc->rx_adptr.rx_adptr[i]);
+		ret = rte_event_eth_rx_adapter_service_id_get(
+				evt_rsrc->event_d_id,
+				&service_id);
+		if (ret != -ESRCH && ret != 0)
+			rte_exit(EXIT_FAILURE,
+				 "Error in starting Rx adapter[%d] service\n",
+				 evt_rsrc->rx_adptr.rx_adptr[i]);
+		l3fwd_service_enable(service_id);
+	}
+
+	for (i = 0; i < evt_rsrc->tx_adptr.nb_tx_adptr; i++) {
+		ret = rte_event_eth_tx_adapter_caps_get(evt_rsrc->event_d_id,
+				evt_rsrc->tx_adptr.tx_adptr[i], &caps);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+				 "Failed to get Rx adapter[%d] caps\n",
+				 evt_rsrc->tx_adptr.tx_adptr[i]);
+		ret = rte_event_eth_tx_adapter_service_id_get(
+				evt_rsrc->event_d_id,
+				&service_id);
+		if (ret != -ESRCH && ret != 0)
+			rte_exit(EXIT_FAILURE,
+				 "Error in starting Rx adapter[%d] service\n",
+				 evt_rsrc->tx_adptr.tx_adptr[i]);
+		l3fwd_service_enable(service_id);
+	}
+}
+
 int
 main(int argc, char **argv)
 {
+	struct l3fwd_event_resources *evt_rsrc;
 	struct lcore_conf *qconf;
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_txconf *txconf;
-	int ret;
+	int i, ret;
 	unsigned nb_ports;
 	uint16_t queueid, portid;
 	unsigned lcore_id;
@@ -839,10 +945,27 @@ main(int argc, char **argv)
 		*(uint64_t *)(val_eth + portid) = dest_eth_addr[portid];
 	}
 
+	evt_rsrc = l3fwd_get_eventdev_rsrc();
 	/* parse application arguments (after the EAL ones) */
 	ret = parse_args(argc, argv);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Invalid L3FWD parameters\n");
+
+	/* Setup function pointers for lookup method. */
+	setup_l3fwd_lookup_tables();
+
+	evt_rsrc->per_port_pool = per_port_pool;
+	evt_rsrc->pkt_pool = pktmbuf_pool;
+	evt_rsrc->port_mask = enabled_port_mask;
+	/* Configure eventdev parameters if user has requested */
+	l3fwd_event_resource_setup(&port_conf);
+	if (evt_rsrc->enabled) {
+		if (l3fwd_em_on)
+			l3fwd_lkp.main_loop = evt_rsrc->ops.em_event_loop;
+		else
+			l3fwd_lkp.main_loop = evt_rsrc->ops.lpm_event_loop;
+		goto skip_port_config;
+	}
 
 	if (check_lcore_params() < 0)
 		rte_exit(EXIT_FAILURE, "check_lcore_params failed\n");
@@ -857,9 +980,6 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "check_port_config failed\n");
 
 	nb_lcores = rte_lcore_count();
-
-	/* Setup function pointers for lookup method. */
-	setup_l3fwd_lookup_tables();
 
 	/* initialize all ports */
 	RTE_ETH_FOREACH_DEV(portid) {
@@ -1028,6 +1148,7 @@ main(int argc, char **argv)
 		}
 	}
 
+skip_port_config:
 	printf("\n");
 
 	/* start ports */
@@ -1057,6 +1178,9 @@ main(int argc, char **argv)
 		}
 	}
 
+	if (evt_rsrc->enabled)
+		l3fwd_event_service_setup();
+
 	printf("\n");
 
 	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
@@ -1071,27 +1195,46 @@ main(int argc, char **argv)
 		}
 	}
 
-
 	check_all_ports_link_status(enabled_port_mask);
 
 	ret = 0;
 	/* launch per-lcore init on every lcore */
 	rte_eal_mp_remote_launch(l3fwd_lkp.main_loop, NULL, CALL_MASTER);
-	RTE_LCORE_FOREACH_SLAVE(lcore_id) {
-		if (rte_eal_wait_lcore(lcore_id) < 0) {
-			ret = -1;
-			break;
-		}
-	}
+	if (evt_rsrc->enabled) {
+		for (i = 0; i < evt_rsrc->rx_adptr.nb_rx_adptr; i++)
+			rte_event_eth_rx_adapter_stop(
+					evt_rsrc->rx_adptr.rx_adptr[i]);
+		for (i = 0; i < evt_rsrc->tx_adptr.nb_tx_adptr; i++)
+			rte_event_eth_tx_adapter_stop(
+					evt_rsrc->tx_adptr.tx_adptr[i]);
 
-	/* stop ports */
-	RTE_ETH_FOREACH_DEV(portid) {
-		if ((enabled_port_mask & (1 << portid)) == 0)
-			continue;
-		printf("Closing port %d...", portid);
-		rte_eth_dev_stop(portid);
-		rte_eth_dev_close(portid);
-		printf(" Done\n");
+		RTE_ETH_FOREACH_DEV(portid) {
+			if ((enabled_port_mask & (1 << portid)) == 0)
+				continue;
+			rte_eth_dev_stop(portid);
+		}
+
+		rte_eal_mp_wait_lcore();
+		RTE_ETH_FOREACH_DEV(portid) {
+			if ((enabled_port_mask & (1 << portid)) == 0)
+				continue;
+			rte_eth_dev_close(portid);
+		}
+
+		rte_event_dev_stop(evt_rsrc->event_d_id);
+		rte_event_dev_close(evt_rsrc->event_d_id);
+
+	} else {
+		rte_eal_mp_wait_lcore();
+
+		RTE_ETH_FOREACH_DEV(portid) {
+			if ((enabled_port_mask & (1 << portid)) == 0)
+				continue;
+			printf("Closing port %d...", portid);
+			rte_eth_dev_stop(portid);
+			rte_eth_dev_close(portid);
+			printf(" Done\n");
+		}
 	}
 	printf("Bye...\n");
 

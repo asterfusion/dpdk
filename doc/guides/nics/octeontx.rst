@@ -24,6 +24,7 @@ Features of the OCTEON TX Ethdev PMD are:
 - SR-IOV VF
 - Multiple queues for TX
 - Lock-free Tx queue
+- Scatter-Gather IO support
 - HW offloaded `ethdev Rx queue` to `eventdev event queue` packet injection
 
 Supported OCTEON TX SoCs
